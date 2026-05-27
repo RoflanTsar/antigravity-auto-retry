@@ -168,25 +168,60 @@ function getProductJsonPath(workbenchHtml: string): string {
   return path.join(root, 'product.json');
 }
 
+function checksumForProduct(content: string, existingChecksum?: string): string {
+  const sha256 = crypto.createHash('sha256').update(content, 'utf8').digest('base64');
+  const sha256NoPadding = sha256.replace(/=+$/, '');
+  const md5 = crypto.createHash('md5').update(content, 'utf8').digest('base64');
+
+  if (existingChecksum && existingChecksum.length === md5.length) {
+    return md5;
+  }
+
+  if (existingChecksum && existingChecksum.length === sha256.length) {
+    return sha256;
+  }
+
+  return sha256NoPadding;
+}
+
 function patchProductJson(workbenchHtml: string, patchedContent: string) {
   try {
     const productPath = getProductJsonPath(workbenchHtml);
     if (!fs.existsSync(productPath)) return;
 
-    let productData = readFile(productPath);
-    let productJson = JSON.parse(productData);
+    const productData = readFile(productPath);
+    const productJson = JSON.parse(productData);
     
     if (productJson && productJson.checksums) {
-      // VS Code checksums are base64-encoded MD5 of the file content
-      const relativeWorkbenchPath = path.relative(path.dirname(productPath), workbenchHtml).replace(/\\/g, '/');
-      const hash = crypto.createHash('md5').update(patchedContent).digest('base64');
-      productJson.checksums[relativeWorkbenchPath] = hash;
-      // Some versions might strip carriage returns before hashing, so calculate both just in case
-      const hashNoCR = crypto.createHash('md5').update(patchedContent.replace(/\r\n/g, '\n')).digest('base64');
-      if (hash !== hashNoCR) {
-         // VS Code generally uses the exact file content hash. But just to be safe, if we needed to handle it, we would.
-         // Actually, let's just stick to exact content first.
+      const appRoot = path.dirname(productPath);
+      const outRoot = path.join(appRoot, 'out');
+      const relativeWorkbenchPath = path.relative(outRoot, workbenchHtml).replace(/\\/g, '/');
+      const oldRelativeWorkbenchPath = path.relative(appRoot, workbenchHtml).replace(/\\/g, '/');
+      
+      // Find the existing key for workbench.html
+      let targetKey = relativeWorkbenchPath;
+      if (typeof productJson.checksums[oldRelativeWorkbenchPath] === 'string') {
+        targetKey = oldRelativeWorkbenchPath;
+      } else {
+        const existingKey = Object.keys(productJson.checksums).find(k => k.endsWith('workbench.html'));
+        if (existingKey) {
+          targetKey = existingKey;
+        }
       }
+
+      const sampleChecksum = Object.values(productJson.checksums).find(
+        (value): value is string => typeof value === 'string'
+      );
+      const existingChecksum = productJson.checksums[targetKey] ?? sampleChecksum;
+      const hash = checksumForProduct(patchedContent, existingChecksum);
+
+      productJson.checksums[targetKey] = hash;
+      
+      // Only delete oldRelativeWorkbenchPath if we are specifically switching to a different target key
+      if (targetKey !== oldRelativeWorkbenchPath && productJson.checksums[oldRelativeWorkbenchPath]) {
+        delete productJson.checksums[oldRelativeWorkbenchPath];
+      }
+
       
       writeFile(productPath, JSON.stringify(productJson, null, '\t'));
     }

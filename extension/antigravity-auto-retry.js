@@ -1,10 +1,12 @@
-(() => {
+oka(() => {
   const GLOBAL_KEY = '__antigravityAutoRetry__';
   const PUBLIC_API_NAME = 'antigravityAutoRetry';
 
   const PANEL_ELEMENT_ID = 'antigravity.agentSidePanelInputBox';
   const RETRY_BUTTON_REGEX = /\bretry\b/i;
   const MIN_CLICK_INTERVAL_MS = 500;
+  const SCAN_DEBOUNCE_MS = 250;
+  const GLOBAL_FALLBACK_SCAN_INTERVAL_MS = 5_000;
 
   // Error contexts where it's safe to auto-retry. Each entry has a label
   // (used in logs) and a regex that must match some ancestor's textContent
@@ -80,15 +82,17 @@
   window[GLOBAL_KEY]?.stop();
 
   let isRunning = false;
-  let isScanQueued = false;
+  let scanTimeout = null;
   let isTripped = false;
 
   let documentObserver = null;
   let panelObserver = null;
   let activePanel = null;
   let heartbeatTimer = null;
+  let globalFallbackTimer = null;
 
   let lastRetryClickAt = 0;
+  let pendingGlobalScan = false;
   let retryClickCount = 0;
   let scanCount = 0;
   const recentClicks = [];
@@ -178,9 +182,33 @@
   };
 
   function queueScan() {
-    if (!isRunning || isScanQueued) return;
-    isScanQueued = true;
-    queueMicrotask(scanAndClickRetry);
+    scheduleScan(SCAN_DEBOUNCE_MS);
+  }
+
+  function queueGlobalScan(delayMs = SCAN_DEBOUNCE_MS) {
+    pendingGlobalScan = true;
+    scheduleScan(delayMs);
+  }
+
+  function scheduleScan(delayMs) {
+    if (!isRunning || scanTimeout) return;
+
+    scanTimeout = setTimeout(() => {
+      scanTimeout = null;
+      scanAndClickRetry();
+    }, delayMs);
+  }
+
+  function handleDocumentMutation(records) {
+    const nextPanel = getPanel();
+    if (nextPanel !== activePanel || !activePanel || !activePanel.isConnected) {
+      queueGlobalScan();
+      return;
+    }
+
+    if (records.every((record) => activePanel.contains(record.target))) return;
+
+    queueGlobalScan();
   }
 
   function attachPanelObserver(panel) {
@@ -200,10 +228,11 @@
   }
 
   function scanAndClickRetry() {
-    isScanQueued = false;
     scanCount++;
 
     if (!isRunning) return;
+
+    const now = Date.now();
 
     const nextPanel = getPanel();
     if (nextPanel !== activePanel) {
@@ -211,12 +240,15 @@
       attachPanelObserver(activePanel);
     }
 
-    // Primary search within the known panel, fall back to document-wide if
-    // the panel id ever changes.
-    const match = findRetryButton(activePanel) || findRetryButton(document.body);
+    // Normal scans stay inside the known panel. The document-wide scan is
+    // still used for debounced document changes outside that panel, preserving
+    // per-chat Retry detection without scanning all VS Code buttons on every
+    // mutation.
+    const includeGlobal = pendingGlobalScan;
+    pendingGlobalScan = false;
+    const match = findRetryMatch(includeGlobal);
     if (!match || !match.button.isConnected) return;
 
-    const now = Date.now();
     if (now - lastRetryClickAt < MIN_CLICK_INTERVAL_MS) return;
 
     const { button, pattern } = match;
@@ -228,12 +260,40 @@
     recordClick(now);
   }
 
+  function findRetryMatch(includeGlobal) {
+    if (activePanel && activePanel.isConnected) {
+      const panelMatch = findRetryButton(activePanel);
+      if (panelMatch) return panelMatch;
+    }
+
+    if (!includeGlobal && activePanel && activePanel.isConnected) {
+      return null;
+    }
+
+    return findRetryButton(document.body);
+  }
+
   function startHeartbeat() {
     stopHeartbeat();
     heartbeatTimer = setInterval(() => {
       const noun = retryClickCount === 1 ? 'retry' : 'retries';
       info(`Still on duty — ${retryClickCount} ${noun} so far.`);
     }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  function startGlobalFallback() {
+    stopGlobalFallback();
+    globalFallbackTimer = setInterval(
+      queueGlobalScan,
+      GLOBAL_FALLBACK_SCAN_INTERVAL_MS
+    );
+  }
+
+  function stopGlobalFallback() {
+    if (globalFallbackTimer) {
+      clearInterval(globalFallbackTimer);
+      globalFallbackTimer = null;
+    }
   }
 
   function stopHeartbeat() {
@@ -253,14 +313,15 @@
 
       isRunning = true;
 
-      documentObserver = new MutationObserver(queueScan);
+      documentObserver = new MutationObserver(handleDocumentMutation);
       documentObserver.observe(document.documentElement, {
         childList: true,
         subtree: true
       });
 
       startHeartbeat();
-      queueScan();
+      startGlobalFallback();
+      queueGlobalScan(0);
       const labels = ACTIVE_PATTERNS.map((p) => `"${p.label}"`).join(' / ');
       info(`On duty — watching for Retry after ${labels} errors (mode: ${RETRY_MODE}).`);
       return this.status();
@@ -268,15 +329,20 @@
 
     stop() {
       isRunning = false;
-      isScanQueued = false;
+      if (scanTimeout) {
+        clearTimeout(scanTimeout);
+        scanTimeout = null;
+      }
 
       documentObserver?.disconnect();
       panelObserver?.disconnect();
       stopHeartbeat();
+      stopGlobalFallback();
 
       documentObserver = null;
       panelObserver = null;
       activePanel = null;
+      pendingGlobalScan = false;
 
       info('Stopped. Call antigravityAutoRetry.start() to resume.');
       return this.status();
@@ -298,6 +364,8 @@
         scanCount,
         recentClicks: recentClicks.length,
         minClickIntervalMs: MIN_CLICK_INTERVAL_MS,
+        scanDebounceMs: SCAN_DEBOUNCE_MS,
+        globalFallbackScanIntervalMs: GLOBAL_FALLBACK_SCAN_INTERVAL_MS,
         mode: RETRY_MODE,
         activePatterns: ACTIVE_PATTERNS.map((p) => p.label)
       };
@@ -308,4 +376,78 @@
   window[PUBLIC_API_NAME] = controller;
 
   controller.start();
+
+  // --- Suppress the "installation appears to be corrupt" notification ---
+  //
+  // Antigravity's IntegrityService caches product.json checksums in the
+  // Electron main process. A "Reload Window" only restarts the renderer,
+  // so the integrity check still compares stale checksums against the
+  // patched workbench.html and fires a false-positive warning. We
+  // auto-dismiss this specific notification so the user isn't nagged.
+  //
+  // On a full quit+restart the checksums match and no notification fires,
+  // so this observer is a no-op in that case.
+  (() => {
+    const CORRUPT_PATTERN = /installation appears to be corrupt/i;
+    const DISMISS_DELAY_MS = 500; // short delay so the notification is fully rendered
+
+    const dismissCorruptNotification = (container) => {
+      const items = container.querySelectorAll(
+        '.notification-list-item, .notifications-list-container .monaco-list-row'
+      );
+      for (const item of items) {
+        const text = item.textContent || '';
+        if (!CORRUPT_PATTERN.test(text)) continue;
+
+        // Find the close/dismiss button within this notification
+        const closeBtn =
+          item.querySelector('.codicon-notifications-clear') ||
+          item.querySelector('.codicon-close') ||
+          item.querySelector('[title="Close Notification"], [title="Clear Notification"], [aria-label="Close Notification"], [aria-label="Clear Notification"]') ||
+          item.querySelector('.action-label.codicon');
+
+        if (closeBtn) {
+          info('Dismissed "installation appears to be corrupt" notification (expected after patching — checksums are correct after a full restart).');
+          closeBtn.click();
+          return true;
+        }
+
+        // Fallback: try the "Don't Show Again" secondary action if close button not found
+        const dontShow = item.querySelector('[title*="Don\'t Show"], [title*="don\'t show"]');
+        if (dontShow) {
+          info('Clicked "Don\'t Show Again" on corrupt-installation notification.');
+          dontShow.click();
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const corruptObserver = new MutationObserver(() => {
+      // The notification center renders asynchronously — give it a tick
+      setTimeout(() => {
+        const container =
+          document.querySelector('.notifications-list-container') ||
+          document.querySelector('.notifications-center') ||
+          document.querySelector('.notification-toast-container') ||
+          document.body;
+        dismissCorruptNotification(container);
+      }, DISMISS_DELAY_MS);
+    });
+
+    // Observe the workbench for notification toasts appearing
+    corruptObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true
+    });
+
+    // Also do an immediate scan in case the notification is already visible
+    setTimeout(() => {
+      const container =
+        document.querySelector('.notifications-list-container') ||
+        document.querySelector('.notification-toast-container') ||
+        document.body;
+      dismissCorruptNotification(container);
+    }, 2000);
+  })();
 })();

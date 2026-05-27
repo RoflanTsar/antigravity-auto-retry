@@ -38,14 +38,15 @@ function macCandidates(): string[] {
 }
 
 function winCandidates(): string[] {
+  const programFilesX86 = process.env['ProgramFiles(x86)'];
   const roots = [
     process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Antigravity IDE'),
     process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Antigravity'),
     process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Antigravity IDE'),
     process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Antigravity'),
-    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)']!, 'Antigravity IDE'),
-    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)']!, 'Antigravity')
-  ].filter(Boolean) as string[];
+    programFilesX86 && path.join(programFilesX86, 'Antigravity IDE'),
+    programFilesX86 && path.join(programFilesX86, 'Antigravity')
+  ].filter((r): r is string => Boolean(r));
   return roots.map((r) => path.join(r, 'resources', 'app'));
 }
 

@@ -106,7 +106,7 @@ async function runUninstall() {
   }
 }
 
-async function showStatus() {
+async function showStatus(context: vscode.ExtensionContext) {
   const state = detectState();
   const workbenchHtml = findWorkbenchHtml();
   const lines = [
@@ -114,7 +114,44 @@ async function showStatus() {
     `Workbench: ${workbenchHtml ?? '(not found)'}`,
     `Retry script: ${userScriptPath()}`
   ];
-  await vscode.window.showInformationMessage(lines.join('\n'), { modal: true });
+
+  const buttons: string[] = [];
+  
+  if (state === 'installed') {
+    buttons.push('Pause / Uninstall Patch');
+  } else if (state === 'not-installed') {
+    buttons.push('Continue / Install Patch');
+  } else if (state === 'needs-reapply') {
+    buttons.push('Reapply Patch');
+    buttons.push('Uninstall Patch');
+  }
+  
+  buttons.push('Update Retry Script', 'Open Retry Script');
+
+  const choice = await vscode.window.showInformationMessage(
+    lines.join('\n'),
+    { modal: true },
+    ...buttons
+  );
+
+  switch (choice) {
+    case 'Pause / Uninstall Patch':
+    case 'Uninstall Patch':
+      await runUninstall();
+      break;
+    case 'Continue / Install Patch':
+      await runInstall(context.extensionPath, false);
+      break;
+    case 'Reapply Patch':
+      await runInstall(context.extensionPath, true);
+      break;
+    case 'Update Retry Script':
+      await runRefreshScript(context);
+      break;
+    case 'Open Retry Script':
+      await openScript();
+      break;
+  }
 }
 
 async function runRefreshScript(context: vscode.ExtensionContext) {
@@ -228,7 +265,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('antigravityAutoRetry.refreshScript', () =>
       runRefreshScript(context)
     ),
-    vscode.commands.registerCommand('antigravityAutoRetry.status', showStatus),
+    vscode.commands.registerCommand('antigravityAutoRetry.status', () => showStatus(context)),
     vscode.commands.registerCommand('antigravityAutoRetry.openScript', openScript)
   );
 
