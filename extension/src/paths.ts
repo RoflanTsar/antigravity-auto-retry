@@ -16,7 +16,16 @@ const WORKBENCH_SUFFIX = path.join(
 
 function macCandidates(): string[] {
   return [
+    '/Applications/Antigravity IDE.app/Contents/Resources/app',
     '/Applications/Antigravity.app/Contents/Resources/app',
+    path.join(
+      os.homedir(),
+      'Applications',
+      'Antigravity IDE.app',
+      'Contents',
+      'Resources',
+      'app'
+    ),
     path.join(
       os.homedir(),
       'Applications',
@@ -30,8 +39,11 @@ function macCandidates(): string[] {
 
 function winCandidates(): string[] {
   const roots = [
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Antigravity IDE'),
     process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Antigravity'),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Antigravity IDE'),
     process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Antigravity'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)']!, 'Antigravity IDE'),
     process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)']!, 'Antigravity')
   ].filter(Boolean) as string[];
   return roots.map((r) => path.join(r, 'resources', 'app'));
@@ -39,9 +51,13 @@ function winCandidates(): string[] {
 
 function linuxCandidates(): string[] {
   return [
+    '/usr/share/antigravity-ide/resources/app',
     '/usr/share/antigravity/resources/app',
+    '/opt/Antigravity IDE/resources/app',
     '/opt/Antigravity/resources/app',
+    '/opt/antigravity-ide/resources/app',
     '/opt/antigravity/resources/app',
+    path.join(os.homedir(), '.local', 'share', 'antigravity-ide', 'resources', 'app'),
     path.join(os.homedir(), '.local', 'share', 'antigravity', 'resources', 'app')
   ];
 }

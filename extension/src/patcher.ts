@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 
 import {
   backupPath,
@@ -156,7 +157,42 @@ export function install(extensionDir: string): { workbenchHtml: string; scriptPa
   const patched = insertBlockBeforeHtmlClose(relaxed, block);
 
   writeFile(workbenchHtml, patched);
+  patchProductJson(workbenchHtml, patched);
   return { workbenchHtml, scriptPath: userScriptPath() };
+}
+
+function getProductJsonPath(workbenchHtml: string): string {
+  // workbenchHtml is root + 'out/vs/code/electron-browser/workbench/workbench.html'
+  // So product.json is at root + 'product.json'
+  const root = path.resolve(path.dirname(workbenchHtml), '../../../../..');
+  return path.join(root, 'product.json');
+}
+
+function patchProductJson(workbenchHtml: string, patchedContent: string) {
+  try {
+    const productPath = getProductJsonPath(workbenchHtml);
+    if (!fs.existsSync(productPath)) return;
+
+    let productData = readFile(productPath);
+    let productJson = JSON.parse(productData);
+    
+    if (productJson && productJson.checksums) {
+      // VS Code checksums are base64-encoded MD5 of the file content
+      const relativeWorkbenchPath = path.relative(path.dirname(productPath), workbenchHtml).replace(/\\/g, '/');
+      const hash = crypto.createHash('md5').update(patchedContent).digest('base64');
+      productJson.checksums[relativeWorkbenchPath] = hash;
+      // Some versions might strip carriage returns before hashing, so calculate both just in case
+      const hashNoCR = crypto.createHash('md5').update(patchedContent.replace(/\r\n/g, '\n')).digest('base64');
+      if (hash !== hashNoCR) {
+         // VS Code generally uses the exact file content hash. But just to be safe, if we needed to handle it, we would.
+         // Actually, let's just stick to exact content first.
+      }
+      
+      writeFile(productPath, JSON.stringify(productJson, null, '\t'));
+    }
+  } catch (e) {
+    console.error('Failed to patch product.json checksums:', e);
+  }
 }
 
 export function uninstall(): { workbenchHtml: string; restored: boolean } {
@@ -167,6 +203,7 @@ export function uninstall(): { workbenchHtml: string; restored: boolean } {
   if (fs.existsSync(bak)) {
     const original = readFile(bak);
     writeFile(workbenchHtml, original);
+    patchProductJson(workbenchHtml, original);
     try {
       fs.unlinkSync(bak);
     } catch {
@@ -179,6 +216,7 @@ export function uninstall(): { workbenchHtml: string; restored: boolean } {
   const html = readFile(workbenchHtml);
   const stripped = stripExistingPatch(html).trimEnd() + '\n';
   writeFile(workbenchHtml, stripped);
+  patchProductJson(workbenchHtml, stripped);
   return { workbenchHtml, restored: false };
 }
 
