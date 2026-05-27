@@ -1,18 +1,23 @@
 import * as vscode from 'vscode';
 
 import {
+  CircuitBreakerMode,
   PatchState,
   PermissionError,
+  RetryScriptConfig,
   WorkbenchNotFoundError,
   detectState,
   install,
   refreshScript,
   sudoHintForPatch,
-  uninstall
+  uninstall,
+  userScriptNeedsConfigRefresh
 } from './patcher';
 import { findWorkbenchHtml, userScriptPath } from './paths';
 
 let statusBarItem: vscode.StatusBarItem;
+const MIN_COOLDOWN_SECONDS = 1;
+const MAX_COOLDOWN_SECONDS = 3600;
 
 const stateLabel: Record<PatchState, string> = {
   'installed': '$(check) Auto Retry: on',
@@ -32,12 +37,70 @@ const stateCommand: Record<PatchState, string> = {
   'needs-reapply': 'antigravityAutoRetry.reapply'
 };
 
+function getRetryScriptConfig(): RetryScriptConfig {
+  const config = vscode.workspace.getConfiguration('antigravityAutoRetry');
+  const rawMode = config.get<string>('circuitBreaker.mode', 'cooldown');
+  const circuitBreakerMode: CircuitBreakerMode = rawMode === 'stop' ? 'stop' : 'cooldown';
+  const rawCooldownSeconds = config.get<number>('circuitBreaker.cooldownSeconds', 60);
+  const cooldownSeconds = Number.isFinite(rawCooldownSeconds)
+    ? Math.min(MAX_COOLDOWN_SECONDS, Math.max(MIN_COOLDOWN_SECONDS, Math.round(rawCooldownSeconds)))
+    : 60;
+
+  return {
+    circuitBreakerMode,
+    circuitBreakerCooldownMs: cooldownSeconds * 1000
+  };
+}
+
+async function ensureConfigCapableScript(
+  extensionDir: string,
+  allowInstallAnyway = false
+): Promise<boolean> {
+  if (!userScriptNeedsConfigRefresh()) return true;
+
+  const options = allowInstallAnyway
+    ? ['Back up & Refresh', 'Install Anyway', 'Cancel']
+    : ['Back up & Refresh', 'Cancel'];
+  const choice = await vscode.window.showWarningMessage(
+    allowInstallAnyway
+      ? 'Your persisted retry script is from an older version and cannot read the new circuit-breaker settings. Refresh it from the bundled version, or install anyway without applying those settings?'
+      : 'Your persisted retry script is from an older version and cannot read the new circuit-breaker settings. Refresh it from the bundled version before applying these settings?',
+    { modal: true },
+    ...options
+  );
+
+  if (choice === 'Install Anyway') return true;
+  if (choice !== 'Back up & Refresh') return false;
+
+  refreshScript(extensionDir, true);
+  return true;
+}
+
 function refreshStatusBar() {
   const state = detectState();
   statusBarItem.text = stateLabel[state];
   statusBarItem.tooltip = stateTooltip[state];
   statusBarItem.command = stateCommand[state];
   statusBarItem.show();
+}
+
+async function applySettingsChange(context: vscode.ExtensionContext) {
+  if (detectState() !== 'installed') return;
+
+  try {
+    if (!(await ensureConfigCapableScript(context.extensionPath))) return;
+    install(context.extensionPath, getRetryScriptConfig());
+    refreshStatusBar();
+    const choice = await vscode.window.showInformationMessage(
+      'Antigravity Auto Retry settings were applied to the patch. Reload the window for the running script to use them.',
+      'Reload Window'
+    );
+    if (choice === 'Reload Window') {
+      await vscode.commands.executeCommand('workbench.action.reloadWindow');
+    }
+  } catch (err) {
+    await handleError(err);
+  }
 }
 
 async function handleError(err: unknown) {
@@ -66,7 +129,11 @@ async function handleError(err: unknown) {
 
 async function runInstall(extensionDir: string, reapply: boolean) {
   try {
-    const { scriptPath } = install(extensionDir);
+    if (!(await ensureConfigCapableScript(extensionDir, true))) {
+      refreshStatusBar();
+      return;
+    }
+    const { scriptPath } = install(extensionDir, getRetryScriptConfig());
     const verb = reapply ? 'Reapplied' : 'Installed';
     const choice = await vscode.window.showInformationMessage(
       `${verb}. Reload the window for the patch to take effect.`,
@@ -112,10 +179,13 @@ async function runUninstall(context: vscode.ExtensionContext) {
 async function showStatus(context: vscode.ExtensionContext) {
   const state = detectState();
   const workbenchHtml = findWorkbenchHtml();
+  const scriptConfig = getRetryScriptConfig();
   const lines = [
     `State: ${state}`,
     `Workbench: ${workbenchHtml ?? '(not found)'}`,
-    `Retry script: ${userScriptPath()}`
+    `Retry script: ${userScriptPath()}`,
+    `Circuit breaker: ${scriptConfig.circuitBreakerMode}`,
+    `Cooldown: ${scriptConfig.circuitBreakerCooldownMs / 1000}s`
   ];
 
   const buttons: string[] = [];
@@ -178,7 +248,7 @@ async function runRefreshScript(context: vscode.ExtensionContext) {
     // Re-patch workbench.html with the new script content so the refresh
     // actually takes effect after a reload. Without this, workbench.html
     // would still carry the previous (now-stale) script inline.
-    install(context.extensionPath);
+    install(context.extensionPath, getRetryScriptConfig());
 
     const summary = wasOverwrite
       ? bak
@@ -277,7 +347,12 @@ export function activate(context: vscode.ExtensionContext) {
       runRefreshScript(context)
     ),
     vscode.commands.registerCommand('antigravityAutoRetry.status', () => showStatus(context)),
-    vscode.commands.registerCommand('antigravityAutoRetry.openScript', openScript)
+    vscode.commands.registerCommand('antigravityAutoRetry.openScript', openScript),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('antigravityAutoRetry.circuitBreaker')) {
+        void applySettingsChange(context);
+      }
+    })
   );
 
   refreshStatusBar();

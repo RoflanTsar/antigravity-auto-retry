@@ -2,7 +2,7 @@
 
 Tired of clicking **Retry** every time Antigravity shows **"Our servers are experiencing high traffic..."** or **"Agent execution terminated due to error."**?
 
-This auto-clicks Retry for you. Two error patterns covered, with safety guards: visible+enabled button only, 500ms debounce, and a 10-clicks-per-minute circuit breaker. Runs as a VSCode extension that patches Antigravity, or as a one-shot DevTools paste.
+This auto-clicks Retry for you. Two error patterns covered, with safety guards: visible+enabled button only, 500ms debounce, and a configurable 10-clicks-per-minute circuit breaker. Runs as a VSCode extension that patches Antigravity, or as a one-shot DevTools paste.
 
 ---
 
@@ -121,7 +121,7 @@ The script:
    - `/high\s+traffic/i` — the transient overload error
    - `/agent\s+(execution\s+)?terminated\s+due\s+to\s+error/i` — generic "Agent terminated" / "Agent execution terminated due to error" failure
 3. Clicks it, at most once per 500 ms.
-4. Auto-stops after 10 clicks in 60 s — circuit breaker against UI-induced click storms.
+4. Trips a circuit breaker after 10 clicks in 60 s — by default it pauses for 60 s and then resumes.
 
 No network calls. No telemetry.
 
@@ -134,6 +134,15 @@ localStorage.antigravityAutoRetryMode = 'high-traffic-only'
 ```
 
 Reload to apply. Set to `'all'` or remove the key to go back.
+
+### Circuit breaker settings
+
+These are persistent extension settings:
+
+- `antigravityAutoRetry.circuitBreaker.mode`: `cooldown` (default) pauses and auto-resumes; `stop` keeps the old manual-reset behavior.
+- `antigravityAutoRetry.circuitBreaker.cooldownSeconds`: cooldown duration when mode is `cooldown` (default: `60`).
+
+Changing either setting re-patches `workbench.html`; reload the window for the running script to use the new values.
 
 ---
 
@@ -154,7 +163,7 @@ localStorage.antigravityAutoRetryDebug = '1'  // verbose per-scan logging
 {
   isRunning: true, isTripped: false, panelFound: true,
   retryClickCount: 5, scanCount: 20, recentClicks: 1,
-  minClickIntervalMs: 500, mode: 'all',
+  minClickIntervalMs: 500, mode: 'all', circuitBreakerMode: 'cooldown',
   activePatterns: ['high traffic', 'agent terminated']
 }
 ```
@@ -178,7 +187,7 @@ localStorage.antigravityAutoRetryDebug = '1'  // verbose per-scan logging
 
 - Only clicks a visible, enabled `Retry` button inside a container matching a known error pattern. Other Retry buttons (Git dialogs, etc.) are ignored.
 - 500 ms minimum between clicks.
-- Auto-disables after 10 clicks in 60 s. Worst case if a non-transient error keeps re-triggering: 10 wasted clicks, then the circuit breaker stops everything.
+- Circuit breaker trips after 10 clicks in 60 s. Default mode pauses for 60 s and resumes; `stop` mode requires `antigravityAutoRetry.reset()` or a reload.
 - Extension only writes to `workbench.html` and `~/.antigravity-auto-retry/`. The `.bak` next to `workbench.html` is the unmodified original for one-command uninstall.
 
 ---

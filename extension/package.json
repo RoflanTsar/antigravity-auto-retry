@@ -2,7 +2,7 @@
   "name": "antigravity-auto-retry",
   "displayName": "Antigravity Auto Retry",
   "description": "Automatically clicks the Retry button when Antigravity shows the high-traffic error.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "RoflanTsar",
   "license": "MIT",
   "repository": {
@@ -20,6 +20,27 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "configuration": {
+      "title": "Antigravity Auto Retry",
+      "properties": {
+        "antigravityAutoRetry.circuitBreaker.mode": {
+          "type": "string",
+          "enum": [
+            "cooldown",
+            "stop"
+          ],
+          "default": "cooldown",
+          "markdownDescription": "What to do after the retry circuit breaker trips. `cooldown` temporarily pauses and auto-resumes. `stop` keeps the old behavior and requires `antigravityAutoRetry.reset()` or a reload."
+        },
+        "antigravityAutoRetry.circuitBreaker.cooldownSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 3600,
+          "markdownDescription": "How long to pause before auto-resuming when `antigravityAutoRetry.circuitBreaker.mode` is `cooldown`. Changes apply after the patch is refreshed/reapplied and the window is reloaded."
+        }
+      }
+    },
     "commands": [
       {
         "command": "antigravityAutoRetry.install",

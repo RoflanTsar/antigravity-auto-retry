@@ -1,29 +1,16 @@
 # antigravity-auto-retry
 
-Tired of clicking **Retry** every time Antigravity shows **"Our servers are experiencing high traffic..."** or **"Agent execution terminated due to error."**?
+Auto-clicks the **Retry** button when Antigravity shows *"high traffic"* or *"agent terminated"* errors.
 
-This auto-clicks Retry for you. Two error patterns covered, with safety guards: visible+enabled button only, 500ms debounce, and a 10-clicks-per-minute circuit breaker. Runs as a VSCode extension that patches Antigravity, or as a one-shot DevTools paste.
-
----
-
-## Why this exists
-
-Antigravity is a VSCode fork that ships Claude via a bundled extension whose webview is locked down — there's no extension API to reach the Retry button from a third-party extension. So this project patches `workbench.html` to load a small script that clicks Retry when one of the known errors is on screen. There's a no-install DevTools paste too, if you don't want to touch `workbench.html`.
+No network calls. No telemetry. MIT licensed.
 
 ---
 
 ## Install
 
-| Method | Effort |
-| --- | --- |
-| **[Ask Antigravity chat](#ask-antigravity-chat-easiest)** | Paste one prompt. Zero clicks after. |
-| **[One-line CLI](#one-line-cli)** | Paste one command in a terminal. |
-| **[Manual install](#manual-install-no-cli)** | Download `.vsix` + pick in command palette. |
-| **[DevTools paste](#devtools-paste-fallback)** | No install. Paste script per window. |
+### Option A — Ask Antigravity (easiest)
 
-### Ask Antigravity chat (easiest)
-
-Antigravity's agent has terminal and command-palette access. Paste this into the chat:
+Paste into the chat:
 
 ```
 Install the Antigravity Auto Retry extension from https://github.com/RoflanTsar/antigravity-auto-retry and apply its workbench patch.
@@ -34,106 +21,97 @@ Install the Antigravity Auto Retry extension from https://github.com/RoflanTsar/
 4. Reload the window again so the patch takes effect.
 ```
 
-If the agent can run command-palette commands, it does all four steps. If it's terminal-only, it stops after step 1 and the extension's first-run notification walks you through the rest — one click.
+### Option B — CLI
 
-### One-line CLI
-
-`antigravity` must be on your `PATH` (Antigravity → Command Palette → **Shell Command: Install 'antigravity' command in PATH** if not).
+Requires `antigravity` on PATH (Command Palette → **Shell Command: Install 'antigravity' command in PATH**).
 
 ```bash
 curl -fL https://github.com/RoflanTsar/antigravity-auto-retry/raw/main/antigravity-auto-retry.vsix -o /tmp/antigravity-auto-retry.vsix && antigravity --install-extension /tmp/antigravity-auto-retry.vsix
 ```
 
-### Manual install (no CLI)
+### Option C — Manual
 
 1. Download [antigravity-auto-retry.vsix](antigravity-auto-retry.vsix).
-2. Antigravity → Command Palette → **Extensions: Install from VSIX…** and pick the file.
+2. Command Palette → **Extensions: Install from VSIX…** → pick the file.
 
-### Apply the patch
+### Option D — DevTools paste (no install)
 
-After install, reload Antigravity. A notification appears — click **Install Patch**, then **Reload Window**. Status bar bottom-right shows **✓ Auto Retry: on**. If Antigravity still shows an "installation appears to be corrupt" banner, update this extension and run **Refresh Retry Script** or **Reapply** so the workbench checksum is refreshed.
+No patching. Runs until you reload — paste again next session.
 
-**Permission denied?** Antigravity was installed with root-owned files. The modal shows the exact `sudo chown` command — run it in a terminal, then click **Install Patch** again.
+1. Open DevTools (`Cmd+Opt+I` / `Ctrl+Shift+I`) → **Console**.
+2. If prompted, type `allow pasting`.
+3. Paste the contents of [antigravity-auto-retry.js](extension/antigravity-auto-retry.js) and hit Enter.
 
-### Verify
+### After install (Options A–C)
 
-DevTools (`Cmd+Opt+I` / `Ctrl+Shift+I`) → Console:
+Reload Antigravity → click **Install Patch** in the notification → **Reload Window**.
+Status bar shows **✓ Auto Retry: on**.
 
-```js
-antigravityAutoRetry.status()
-// { isRunning: true, panelFound: true, mode: 'all', ... }
-```
+> **Permission denied?** Run the `sudo chown` command shown in the modal, then retry.
 
-Trigger an error (or wait for one) and you'll see `[Antigravity Auto Retry] Clicked Retry (#1) — matched "...".`.
+---
 
-### Build from source
+## Update
+
+### Antigravity was updated
+
+Antigravity updates overwrite `workbench.html`, removing the patch. Status bar shows **Auto Retry: reapply**.
+
+→ Click the status bar item or run **Reapply (after update)** → **Reload Window**.
+
+### New extension version
+
+1. Install the new `.vsix`.
+2. Reload the window.
+3. Run **Refresh Retry Script** → **Back up & Refresh** → **Reload Window**.
+
+---
+
+## Build from source
 
 ```bash
 git clone https://github.com/RoflanTsar/antigravity-auto-retry.git
 cd antigravity-auto-retry/extension && npm install && npm run build && npm run package
-# writes ../antigravity-auto-retry.vsix — Node 18+ required
+# outputs ../antigravity-auto-retry.vsix — requires Node 18+
 ```
 
 ---
 
-## Updating
-
-Two scenarios, two flows.
-
-### Antigravity got updated
-
-Antigravity updates overwrite `workbench.html`, removing the patch. Status bar shows **Auto Retry: reapply** and a notification nudges you. Click the status bar item, or run **Antigravity Auto Retry: Reapply (after update)**, then **Reload Window**.
-
-### New extension version (script fixes, new patterns)
-
-When you install a newer `.vsix`, three things need to happen — reinstalling alone isn't enough, because `workbench.html` still has the *old* script content inlined.
-
-1. Reload the window so the new extension code activates.
-2. Run **Antigravity Auto Retry: Refresh Retry Script** → choose **Back up & Refresh**. This overwrites your local script with the bundled version *and* re-patches `workbench.html` in one shot.
-3. Click **Reload Window** on the prompt.
-
-Stuck on a pre-fix `Refresh` command (which used to skip the re-patch step)? The escape hatch is:
-
-```bash
-rm ~/.antigravity-auto-retry/antigravity-auto-retry.js
-```
-
-Then run **Antigravity Auto Retry: Reapply** → **Reload Window**. Reapply re-seeds the script from the new bundle (since the file is missing) and re-patches `workbench.html`.
-
----
-
-## DevTools paste fallback
-
-No install, no patching. One-off use, locked-down machines, or quick tests after editing the script. Runs until you reload — paste again next session.
-
-1. DevTools (`Cmd+Opt+I` / `Ctrl+Shift+I`) → **Console**.
-2. If Antigravity prompts, type `allow pasting`.
-3. Copy [extension/antigravity-auto-retry.js](extension/antigravity-auto-retry.js), paste, hit Enter.
-
----
-
-## How it works
-
-The script:
-
-1. Starts a `MutationObserver` on the Antigravity workbench.
-2. Watches for a visible, enabled `Retry` button whose ancestor container text matches one of:
-   - `/high\s+traffic/i` — the transient overload error
-   - `/agent\s+(execution\s+)?terminated\s+due\s+to\s+error/i` — generic "Agent terminated" / "Agent execution terminated due to error" failure
-3. Clicks it, at most once per 500 ms.
-4. Auto-stops after 10 clicks in 60 s — circuit breaker against UI-induced click storms.
-
-No network calls. No telemetry.
+## Configuration
 
 ### Retry mode
 
-Default is `all` (both patterns). To narrow to just the transient overload error:
+Default: `all` (both error patterns). To only retry high-traffic errors:
 
 ```js
 localStorage.antigravityAutoRetryMode = 'high-traffic-only'
 ```
 
-Reload to apply. Set to `'all'` or remove the key to go back.
+Reload to apply. Remove the key to go back to `all`.
+
+### Circuit breaker
+
+Trips after 10 clicks in 60 seconds.
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `antigravityAutoRetry.circuitBreaker.mode` | `cooldown` | `cooldown` pauses and auto-resumes; `stop` requires manual `antigravityAutoRetry.reset()` or reload. |
+| `antigravityAutoRetry.circuitBreaker.cooldownSeconds` | `60` | Pause duration for `cooldown` mode. |
+
+Changes re-patch `workbench.html`; reload the window to apply.
+
+---
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| Install | First-time setup: backs up `workbench.html`, seeds the script, applies the patch. |
+| Reapply (after update) | Re-patches `workbench.html` after an Antigravity update reverted it. |
+| Refresh Retry Script | Replaces the script with the bundled version and re-patches. Use after upgrading the extension. |
+| Uninstall | Restores `workbench.html` from backup. |
+| Show Status | Prints current state and paths. |
+| Open Retry Script | Opens `~/.antigravity-auto-retry/antigravity-auto-retry.js` for editing. |
 
 ---
 
@@ -142,56 +120,20 @@ Reload to apply. Set to `'all'` or remove the key to go back.
 ```js
 antigravityAutoRetry.start()
 antigravityAutoRetry.stop()
-antigravityAutoRetry.status()
-antigravityAutoRetry.reset()   // clears the circuit breaker
+antigravityAutoRetry.status()   // { isRunning, isTripped, panelFound, mode, ... }
+antigravityAutoRetry.reset()    // clears the circuit breaker
 
-localStorage.antigravityAutoRetryDebug = '1'  // verbose per-scan logging
-```
-
-`status()` returns:
-
-```js
-{
-  isRunning: true, isTripped: false, panelFound: true,
-  retryClickCount: 5, scanCount: 20, recentClicks: 1,
-  minClickIntervalMs: 500, mode: 'all',
-  activePatterns: ['high traffic', 'agent terminated']
-}
+localStorage.antigravityAutoRetryDebug = '1'  // verbose logging
 ```
 
 ---
 
-## Commands
+## Known tradeoffs
 
-| Command | What it does |
-| --- | --- |
-| Install | First-time install. Backs up `workbench.html`, seeds the retry script, applies the patch. |
-| Reapply (after update) | Re-patches `workbench.html` after an Antigravity update reverted it. |
-| Refresh Retry Script | Pulls the latest bundled script into `~/.antigravity-auto-retry/` and re-patches `workbench.html`. Run after upgrading the extension. Optional backup of your current script. |
-| Uninstall | Restores `workbench.html` from backup. Leaves your retry script in place. |
-| Show Status | Prints current state and paths. |
-| Open Retry Script | Opens `~/.antigravity-auto-retry/antigravity-auto-retry.js` for editing. |
-
----
-
-## Safety
-
-- Only clicks a visible, enabled `Retry` button inside a container matching a known error pattern. Other Retry buttons (Git dialogs, etc.) are ignored.
-- 500 ms minimum between clicks.
-- Auto-disables after 10 clicks in 60 s. Worst case if a non-transient error keeps re-triggering: 10 wasted clicks, then the circuit breaker stops everything.
-- Extension only writes to `workbench.html` and `~/.antigravity-auto-retry/`. The `.bak` next to `workbench.html` is the unmodified original for one-command uninstall.
-
----
-
-## Tradeoffs
-
-These apply to the extension path only — the DevTools paste is transient and leaves nothing behind.
-
-- **Integrity checks.** Antigravity checksums its bundle. The extension refreshes the `workbench.html` checksum after patching, but older extension builds or future checksum changes can still show an "installation appears to be corrupt" banner. Update the extension and run **Refresh Retry Script** or **Reapply**.
-- **Antigravity updates revert the patch.** Use **Reapply** — the extension nudges you.
-- **Selector drift.** If Antigravity rearranges the Retry button or rewords the errors, edit `~/.antigravity-auto-retry/antigravity-auto-retry.js` and reload (or open an issue and I'll update the patterns).
-- **Non-transient errors.** The `agent terminated` pattern can also fire on auth/quota/code errors. Circuit breaker caps damage; switch to `high-traffic-only` mode if you'd rather click those manually.
-- **Cross-origin webview.** If Antigravity moves the chat into an isolated webview, this approach stops working. CDP-via-external-process would be a different project.
+- **"Installation appears corrupt" banner** — Antigravity checksums its bundle. Update the extension and run **Refresh Retry Script** or **Reapply** to refresh the checksum.
+- **Antigravity updates revert the patch** — use **Reapply**.
+- **Selector drift** — if Antigravity changes button/error markup, edit the script or open an issue.
+- **Non-transient errors** — `agent terminated` can fire on auth/quota errors too. Use `high-traffic-only` mode if that's a problem.
 
 ---
 

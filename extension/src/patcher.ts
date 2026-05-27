@@ -13,6 +13,12 @@ const BEGIN_MARKER = '<!-- BEGIN antigravity-auto-retry -->';
 const END_MARKER = '<!-- END antigravity-auto-retry -->';
 
 export type PatchState = 'not-installed' | 'installed' | 'needs-reapply';
+export type CircuitBreakerMode = 'cooldown' | 'stop';
+
+export interface RetryScriptConfig {
+  circuitBreakerMode: CircuitBreakerMode;
+  circuitBreakerCooldownMs: number;
+}
 
 export class PermissionError extends Error {
   constructor(message: string, public readonly targetPath: string) {
@@ -30,6 +36,19 @@ export class WorkbenchNotFoundError extends Error {
 
 function readFile(p: string): string {
   return fs.readFileSync(p, 'utf8');
+}
+
+function scriptSupportsInjectedConfig(scriptSource: string): boolean {
+  return (
+    scriptSource.includes('__antigravityAutoRetryConfig__') &&
+    scriptSource.includes('circuitBreakerMode')
+  );
+}
+
+export function userScriptNeedsConfigRefresh(): boolean {
+  const target = userScriptPath();
+  if (!fs.existsSync(target)) return false;
+  return !scriptSupportsInjectedConfig(readFile(target));
 }
 
 function writeFile(p: string, content: string) {
@@ -80,13 +99,15 @@ function ensureUnsafeInlineInCsp(html: string): string {
   return html.replace(full, `${prefix}${newPolicy}${suffix}`);
 }
 
-function buildScriptBlock(scriptSource: string): string {
+function buildScriptBlock(scriptSource: string, config: RetryScriptConfig): string {
   // Wrap user script in a try/catch so a syntax error in the retry script
   // can never break the workbench bootstrap. Errors go to the renderer console.
+  const configSource = JSON.stringify(config);
   return [
     BEGIN_MARKER,
     '<script>',
     'try {',
+    `window.__antigravityAutoRetryConfig__ = ${configSource};`,
     scriptSource,
     '} catch (e) { console.error("[antigravityAutoRetry] script failed", e); }',
     '</script>',
@@ -141,7 +162,10 @@ export function detectState(): PatchState {
   return 'not-installed';
 }
 
-export function install(extensionDir: string): { workbenchHtml: string; scriptPath: string } {
+export function install(
+  extensionDir: string,
+  config: RetryScriptConfig
+): { workbenchHtml: string; scriptPath: string } {
   const workbenchHtml = findWorkbenchHtml();
   if (!workbenchHtml) throw new WorkbenchNotFoundError();
 
@@ -153,7 +177,7 @@ export function install(extensionDir: string): { workbenchHtml: string; scriptPa
 
   const stripped = stripExistingPatch(original);
   const relaxed = ensureUnsafeInlineInCsp(stripped);
-  const block = buildScriptBlock(scriptSource);
+  const block = buildScriptBlock(scriptSource, config);
   const patched = insertBlockBeforeHtmlClose(relaxed, block);
 
   writeFile(workbenchHtml, patched);

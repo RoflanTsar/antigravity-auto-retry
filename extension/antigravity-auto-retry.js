@@ -37,11 +37,28 @@
       ? ERROR_PATTERNS.filter((p) => p.label === 'high traffic')
       : ERROR_PATTERNS;
 
+  const CONFIG = (() => {
+    const defaults = {
+      circuitBreakerMode: 'cooldown',
+      circuitBreakerCooldownMs: 60_000
+    };
+    const raw = window.__antigravityAutoRetryConfig__ || {};
+    const cooldownMs = Number(raw.circuitBreakerCooldownMs);
+
+    return {
+      circuitBreakerMode: raw.circuitBreakerMode === 'stop' ? 'stop' : defaults.circuitBreakerMode,
+      circuitBreakerCooldownMs: Number.isFinite(cooldownMs)
+        ? Math.min(3_600_000, Math.max(1000, Math.round(cooldownMs)))
+        : defaults.circuitBreakerCooldownMs
+    };
+  })();
+
   // Safety circuit breaker. If the retry button stays visible after this many
   // clicks in this window, assume the UI is broken and stop clicking.
   const RUNAWAY_WINDOW_MS = 60_000;
   const RUNAWAY_MAX_CLICKS = 10;
-  const RUNAWAY_COOLDOWN_MS = 60_000;
+  const RUNAWAY_COOLDOWN_MS = CONFIG.circuitBreakerCooldownMs;
+  const CIRCUIT_BREAKER_MODE = CONFIG.circuitBreakerMode;
 
   // Periodic "still on duty" heartbeat so the user can see the script is
   // alive without enabling verbose debug logging.
@@ -220,6 +237,19 @@
     isTripped = true;
     stoppedByCircuitBreaker = true;
     trippedAt = now;
+    clearCircuitBreakerTimer();
+    isRunning = false;
+    disconnectObservers();
+
+    if (CIRCUIT_BREAKER_MODE === 'stop') {
+      warn(
+        `Circuit breaker stopped — ${RUNAWAY_MAX_CLICKS} clicks in ${
+          RUNAWAY_WINDOW_MS / 1000
+        }s. Call antigravityAutoRetry.reset() to resume.`
+      );
+      return;
+    }
+
     nextAutoResumeAt = now + RUNAWAY_COOLDOWN_MS;
 
     warn(
@@ -228,10 +258,6 @@
       }s. Auto-resuming in ${RUNAWAY_COOLDOWN_MS / 1000}s. Call antigravityAutoRetry.reset() to resume now.`
     );
 
-    clearCircuitBreakerTimer();
-    isRunning = false;
-    disconnectObservers();
-    nextAutoResumeAt = now + RUNAWAY_COOLDOWN_MS;
     circuitBreakerTimer = setTimeout(resumeAfterCircuitBreaker, RUNAWAY_COOLDOWN_MS);
   };
 
@@ -305,7 +331,10 @@
     start() {
       if (isRunning) return this.status();
       if (isTripped) {
-        warn('Refusing to start — circuit breaker cooldown is active. Call antigravityAutoRetry.reset() to resume now.');
+        const reason = CIRCUIT_BREAKER_MODE === 'cooldown'
+          ? 'circuit breaker cooldown is active'
+          : 'circuit breaker is stopped';
+        warn(`Refusing to start — ${reason}. Call antigravityAutoRetry.reset() to resume now.`);
         return this.status();
       }
 
@@ -365,6 +394,7 @@
         minClickIntervalMs: MIN_CLICK_INTERVAL_MS,
         runawayWindowMs: RUNAWAY_WINDOW_MS,
         runawayMaxClicks: RUNAWAY_MAX_CLICKS,
+        circuitBreakerMode: CIRCUIT_BREAKER_MODE,
         runawayCooldownMs: RUNAWAY_COOLDOWN_MS,
         mode: RETRY_MODE,
         activePatterns: ACTIVE_PATTERNS.map((p) => p.label)
