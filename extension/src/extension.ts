@@ -86,17 +86,20 @@ async function runInstall(extensionDir: string, reapply: boolean) {
   }
 }
 
-async function runUninstall() {
+async function runUninstall(context: vscode.ExtensionContext) {
   try {
     const { restored } = uninstall();
     const detail = restored
       ? 'workbench.html restored from backup.'
       : 'Backup was missing; stripped the script block instead.';
     const choice = await vscode.window.showInformationMessage(
-      `Uninstalled. ${detail} Reload the window to drop the script.`,
-      'Reload Window'
+      `Uninstalled. ${detail} Fully quit and restart Antigravity to complete.`,
+      'Quit Antigravity',
+      'Reload Window (may show corrupt warning)'
     );
-    if (choice === 'Reload Window') {
+    if (choice === 'Quit Antigravity') {
+      await vscode.commands.executeCommand('workbench.action.quit');
+    } else if (choice?.startsWith('Reload')) {
       await vscode.commands.executeCommand('workbench.action.reloadWindow');
     }
   } catch (err) {
@@ -137,7 +140,7 @@ async function showStatus(context: vscode.ExtensionContext) {
   switch (choice) {
     case 'Pause / Uninstall Patch':
     case 'Uninstall Patch':
-      await runUninstall();
+      await runUninstall(context);
       break;
     case 'Continue / Install Patch':
       await runInstall(context.extensionPath, false);
@@ -215,9 +218,15 @@ async function maybeNudge(context: vscode.ExtensionContext) {
   if (state === 'installed') return;
 
   if (state === 'not-installed') {
-    const shownKey = 'firstRunPromptShown';
-    if (context.globalState.get<boolean>(shownKey)) return;
-    await context.globalState.update(shownKey, true);
+    // Show the install nudge with a 24h cooldown so we don't nag on every
+    // reload, but DO re-show after reinstalls/updates (unlike the old
+    // one-shot flag that persisted across extension reinstalls forever).
+    const lastInstallNudgeKey = 'lastInstallNudge';
+    const last = context.globalState.get<number>(lastInstallNudgeKey, 0);
+    const now = Date.now();
+    if (now - last < 24 * 60 * 60 * 1000) return;
+
+    await context.globalState.update(lastInstallNudgeKey, now);
 
     const choice = await vscode.window.showInformationMessage(
       'Antigravity Auto Retry is installed. Apply the workbench patch now so it runs on every launch?',
@@ -261,7 +270,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('antigravityAutoRetry.reapply', () =>
       runInstall(context.extensionPath, true)
     ),
-    vscode.commands.registerCommand('antigravityAutoRetry.uninstall', runUninstall),
+    vscode.commands.registerCommand('antigravityAutoRetry.uninstall', () =>
+      runUninstall(context)
+    ),
     vscode.commands.registerCommand('antigravityAutoRetry.refreshScript', () =>
       runRefreshScript(context)
     ),
