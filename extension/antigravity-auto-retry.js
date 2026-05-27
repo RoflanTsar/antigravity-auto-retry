@@ -41,6 +41,7 @@
   // clicks in this window, assume the UI is broken and stop clicking.
   const RUNAWAY_WINDOW_MS = 60_000;
   const RUNAWAY_MAX_CLICKS = 10;
+  const RUNAWAY_COOLDOWN_MS = 60_000;
 
   // Periodic "still on duty" heartbeat so the user can see the script is
   // alive without enabling verbose debug logging.
@@ -87,8 +88,12 @@
   let panelObserver = null;
   let activePanel = null;
   let heartbeatTimer = null;
+  let circuitBreakerTimer = null;
 
   let lastRetryClickAt = 0;
+  let trippedAt = 0;
+  let nextAutoResumeAt = 0;
+  let stoppedByCircuitBreaker = false;
   let retryClickCount = 0;
   let scanCount = 0;
   const recentClicks = [];
@@ -160,21 +165,74 @@
     return null;
   };
 
-  const recordClick = (now) => {
-    recentClicks.push(now);
+  const pruneRecentClicks = (now) => {
     const cutoff = now - RUNAWAY_WINDOW_MS;
     while (recentClicks.length && recentClicks[0] < cutoff) {
       recentClicks.shift();
     }
+  };
+
+  const recordClick = (now) => {
+    recentClicks.push(now);
+    pruneRecentClicks(now);
     if (recentClicks.length >= RUNAWAY_MAX_CLICKS) {
-      isTripped = true;
-      warn(
-        `Circuit breaker tripped — ${RUNAWAY_MAX_CLICKS} clicks in ${
-          RUNAWAY_WINDOW_MS / 1000
-        }s. Stopping to avoid a click loop. Reload the window to reset.`
-      );
-      controller.stop();
+      tripCircuitBreaker(now);
     }
+  };
+
+  const clearCircuitBreakerTimer = () => {
+    if (circuitBreakerTimer) {
+      clearTimeout(circuitBreakerTimer);
+      circuitBreakerTimer = null;
+    }
+    nextAutoResumeAt = 0;
+  };
+
+  const disconnectObservers = () => {
+    isScanQueued = false;
+    documentObserver?.disconnect();
+    panelObserver?.disconnect();
+    stopHeartbeat();
+
+    documentObserver = null;
+    panelObserver = null;
+    activePanel = null;
+  };
+
+  const resumeAfterCircuitBreaker = () => {
+    circuitBreakerTimer = null;
+    nextAutoResumeAt = 0;
+
+    if (!isTripped || !stoppedByCircuitBreaker) return;
+
+    isTripped = false;
+    stoppedByCircuitBreaker = false;
+    trippedAt = 0;
+    recentClicks.length = 0;
+
+    info('Circuit breaker cooldown elapsed — resuming Retry watcher.');
+    controller.start();
+  };
+
+  const tripCircuitBreaker = (now) => {
+    if (isTripped) return;
+
+    isTripped = true;
+    stoppedByCircuitBreaker = true;
+    trippedAt = now;
+    nextAutoResumeAt = now + RUNAWAY_COOLDOWN_MS;
+
+    warn(
+      `Circuit breaker paused — ${RUNAWAY_MAX_CLICKS} clicks in ${
+        RUNAWAY_WINDOW_MS / 1000
+      }s. Auto-resuming in ${RUNAWAY_COOLDOWN_MS / 1000}s. Call antigravityAutoRetry.reset() to resume now.`
+    );
+
+    clearCircuitBreakerTimer();
+    isRunning = false;
+    disconnectObservers();
+    nextAutoResumeAt = now + RUNAWAY_COOLDOWN_MS;
+    circuitBreakerTimer = setTimeout(resumeAfterCircuitBreaker, RUNAWAY_COOLDOWN_MS);
   };
 
   function queueScan() {
@@ -247,7 +305,7 @@
     start() {
       if (isRunning) return this.status();
       if (isTripped) {
-        warn('Refusing to start — circuit breaker tripped. Reload the window to reset.');
+        warn('Refusing to start — circuit breaker cooldown is active. Call antigravityAutoRetry.reset() to resume now.');
         return this.status();
       }
 
@@ -269,35 +327,45 @@
     stop() {
       isRunning = false;
       isScanQueued = false;
+      stoppedByCircuitBreaker = false;
+      clearCircuitBreakerTimer();
 
-      documentObserver?.disconnect();
-      panelObserver?.disconnect();
-      stopHeartbeat();
-
-      documentObserver = null;
-      panelObserver = null;
-      activePanel = null;
+      disconnectObservers();
 
       info('Stopped. Call antigravityAutoRetry.start() to resume.');
       return this.status();
     },
 
     reset() {
+      const shouldRestart = stoppedByCircuitBreaker && !isRunning;
+      clearCircuitBreakerTimer();
       isTripped = false;
+      stoppedByCircuitBreaker = false;
+      trippedAt = 0;
       recentClicks.length = 0;
+      if (shouldRestart) return this.start();
       return this.status();
     },
 
     status() {
+      const now = Date.now();
+      pruneRecentClicks(now);
       return {
         isRunning,
         isTripped,
+        stoppedByCircuitBreaker,
         panelFound: Boolean(getPanel()),
         lastRetryClickAt,
+        trippedAt,
+        nextAutoResumeAt,
+        autoResumeInMs: nextAutoResumeAt ? Math.max(0, nextAutoResumeAt - now) : 0,
         retryClickCount,
         scanCount,
         recentClicks: recentClicks.length,
         minClickIntervalMs: MIN_CLICK_INTERVAL_MS,
+        runawayWindowMs: RUNAWAY_WINDOW_MS,
+        runawayMaxClicks: RUNAWAY_MAX_CLICKS,
+        runawayCooldownMs: RUNAWAY_COOLDOWN_MS,
         mode: RETRY_MODE,
         activePatterns: ACTIVE_PATTERNS.map((p) => p.label)
       };
