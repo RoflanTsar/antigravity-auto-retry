@@ -133,18 +133,14 @@ async function runInstall(extensionDir: string, reapply: boolean) {
       refreshStatusBar();
       return;
     }
-    const { scriptPath } = install(extensionDir, getRetryScriptConfig());
+    install(extensionDir, getRetryScriptConfig());
     const verb = reapply ? 'Reapplied' : 'Installed';
     const choice = await vscode.window.showInformationMessage(
       `${verb}. Reload the window for the patch to take effect.`,
-      'Reload Window',
-      'Open Retry Script'
+      'Reload Window'
     );
     if (choice === 'Reload Window') {
       await vscode.commands.executeCommand('workbench.action.reloadWindow');
-    } else if (choice === 'Open Retry Script') {
-      const doc = await vscode.workspace.openTextDocument(scriptPath);
-      await vscode.window.showTextDocument(doc);
     }
   } catch (err) {
     await handleError(err);
@@ -199,7 +195,7 @@ async function showStatus(context: vscode.ExtensionContext) {
     buttons.push('Uninstall Patch');
   }
   
-  buttons.push('Update Retry Script', 'Open Retry Script');
+  buttons.push('Update Retry Script');
 
   const choice = await vscode.window.showInformationMessage(
     lines.join('\n'),
@@ -220,9 +216,6 @@ async function showStatus(context: vscode.ExtensionContext) {
       break;
     case 'Update Retry Script':
       await runRefreshScript(context);
-      break;
-    case 'Open Retry Script':
-      await openScript();
       break;
   }
 }

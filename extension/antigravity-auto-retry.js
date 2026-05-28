@@ -134,6 +134,50 @@
 
   const getPanel = () => document.getElementById(PANEL_ELEMENT_ID);
 
+  const getDeepActiveElement = () => {
+    let active = document.activeElement;
+    while (active?.shadowRoot?.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    return active;
+  };
+
+  const isTextEntryElement = (el) => {
+    if (!el || !el.isConnected) return false;
+    if (el.isContentEditable || el.getAttribute('role') === 'textbox') return true;
+
+    const tagName = el.tagName;
+    if (tagName === 'TEXTAREA') return true;
+    if (tagName !== 'INPUT') return false;
+
+    const type = (el.getAttribute('type') || 'text').toLowerCase();
+    return ![
+      'button',
+      'checkbox',
+      'color',
+      'file',
+      'hidden',
+      'image',
+      'radio',
+      'range',
+      'reset',
+      'submit'
+    ].includes(type);
+  };
+
+  const restoreTextEntryFocus = (el) => {
+    if (!isTextEntryElement(el)) return;
+
+    const restore = () => {
+      if (!el.isConnected || document.activeElement === el) return;
+      el.focus({ preventScroll: true });
+      debug('restored text-entry focus after retry click');
+    };
+
+    setTimeout(restore, 0);
+    setTimeout(restore, 50);
+  };
+
   const getButtonText = (btn) => {
     const candidates = [
       btn.textContent,
@@ -304,11 +348,13 @@
     if (now - lastRetryClickAt < MIN_CLICK_INTERVAL_MS) return;
 
     const { button, pattern } = match;
+    const focusedBeforeClick = getDeepActiveElement();
     lastRetryClickAt = now;
     retryClickCount++;
     info(`Clicked Retry (#${retryClickCount}) — matched "${pattern.label}".`);
     debug('clicked retry', { retryClickCount, scanCount, pattern: pattern.label });
     button.click();
+    restoreTextEntryFocus(focusedBeforeClick);
     recordClick(now);
   }
 
@@ -406,65 +452,4 @@
   window[PUBLIC_API_NAME] = controller;
 
   controller.start();
-
-  // --- Suppress the "installation appears to be corrupt" notification ---
-  //
-  // Antigravity's IntegrityService can report a stale checksum after the
-  // workbench patch is applied, especially after a renderer-only Reload
-  // Window. Keep this separate from the retry observer: timed checks avoid
-  // adding another global MutationObserver and do not affect retry scanning.
-  (() => {
-    const CORRUPT_PATTERN = /installation appears to be corrupt/i;
-    const CHECK_TIMES_MS = [500, 1_500, 3_000, 5_000, 10_000, 20_000, 30_000];
-
-    const findNotificationContainers = () => [
-      document.querySelector('.notifications-list-container'),
-      document.querySelector('.notifications-center'),
-      document.querySelector('.notification-toast-container'),
-      document.body
-    ].filter(Boolean);
-
-    const describeElement = (el) => {
-      if (!el) return null;
-      return {
-        tag: el.tagName,
-        id: el.id || null,
-        className: typeof el.className === 'string' ? el.className : null
-      };
-    };
-
-    const hideCorruptNotification = (item) => {
-      if (item.dataset.antigravityAutoRetryHidden === 'true') return true;
-
-      debug('hiding corrupt-installation notification without click', {
-        activeElement: describeElement(document.activeElement)
-      });
-      item.dataset.antigravityAutoRetryHidden = 'true';
-      item.setAttribute('aria-hidden', 'true');
-      item.style.setProperty('display', 'none', 'important');
-      info('Hid "installation appears to be corrupt" notification without changing focus.');
-      return true;
-    };
-
-    const dismissCorruptNotification = () => {
-      for (const container of findNotificationContainers()) {
-        const items = container.querySelectorAll(
-          '.notification-list-item, .notifications-list-container .monaco-list-row, .notification-toast'
-        );
-
-        for (const item of items) {
-          const text = item.textContent || '';
-          if (!CORRUPT_PATTERN.test(text)) continue;
-
-          return hideCorruptNotification(item);
-        }
-      }
-
-      return false;
-    };
-
-    for (const delay of CHECK_TIMES_MS) {
-      setTimeout(dismissCorruptNotification, delay);
-    }
-  })();
 })();
